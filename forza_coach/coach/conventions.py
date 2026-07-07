@@ -49,6 +49,7 @@ class CoachSample:
     front_slip: float        # signed avg normalized slip angle, front axle
     rear_slip: float         # signed avg normalized slip angle, rear axle
     rear_sat: float          # avg |combined slip| rear axle (0 = grip)
+    car_ordinal: int         # which car - keys the per-car calibration
 
     @property
     def cs_error(self) -> float:
@@ -93,4 +94,5 @@ def enrich(p: dict) -> CoachSample | None:
         if slips_ok else 0.0,
         rear_sat=(abs(p["tire_combined_slip_rl"]) + abs(p["tire_combined_slip_rr"])) / 2
         if slips_ok else 0.0,
+        car_ordinal=p.get("car_ordinal", 0),
     )

@@ -1,7 +1,15 @@
 """Scoring and fault diagnosis for a completed drift event.
 
-Produces an EventReport with a short verdict (fits the HUD), a fault list
-with concrete numbers, and a full multi-line report card for the CLI.
+Diagnosis is causal, not end-state: the event timeline (including ~2 s of
+pre-drift entry context) is walked forward against the car's recoverability
+envelope, and blame lands on the FIRST input that left it - everything the
+driver did after that moment is symptom. In particular, once the slip angle
+passes the recoverable maximum, or the steering is already at full lock,
+"counter more/earlier" is no longer valid advice and the verdict must point
+upstream (throttle, entry).
+
+Produces an EventReport with a short verdict (fits the HUD), what-you-did /
+what-to-do lines, the causal timeline, and a full report card for the CLI.
 """
 
 from __future__ import annotations
@@ -9,6 +17,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from .calibration import DEFAULT_BAND, DEFAULT_BETA_MAX, Calibration
 from .conventions import PEAK_SLIP_DEG, CoachSample
 from .events import DriftEvent
 
@@ -17,6 +26,12 @@ SCRUB_LIMIT = 1.0      # normalized front slip beyond this = scrubbing
 LIFT_DROP = 0.5        # throttle drop (0..1) within LIFT_WINDOW = a lift
 LIFT_WINDOW_S = 0.4
 SNAP_COLLAPSE_S = 0.6  # peak -> grip faster than this = abrupt regrip
+
+STEER_SAT = 0.95       # |steer| past this = the steering channel is spent
+PIN_THR = 0.90         # throttle past this counts as pinned
+DEBT_TRIGGER = 0.30    # integral of (throttle - band_top) dt that flags
+                       # over-throttle, e.g. 30% over for 1 s
+COUNTER_MIN = 0.30     # less correct-direction steer than this = no counter
 
 
 @dataclass
@@ -43,6 +58,10 @@ class EventReport:
     verdict: str            # headline for the HUD
     did: str                # what the driver actually did, with numbers
     fix: str                # what to do instead
+    root_cause: str         # first envelope violation ("" = none found)
+    ponr_s: float | None    # seconds into the event past which recovery
+                            # was impossible (spins only)
+    timeline: list[str] = field(default_factory=list)
     faults: list[str] = field(default_factory=list)
 
     def card(self, index: int) -> str:
@@ -63,6 +82,9 @@ class EventReport:
             f"  you            {self.did}",
             f"  score          {self.score}/100",
         ]
+        if self.timeline:
+            lines.append("  timeline")
+            lines += [f"    {t}" for t in self.timeline]
         if self.faults:
             lines.append("  fix")
             lines += [f"    - {f}" for f in self.faults]
@@ -123,6 +145,104 @@ def _corr(xs, ys) -> float:
     return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy)
 
 
+def _causal_walk(ev: DriftEvent, band_fn, beta_max: float):
+    """Walk entry + event forward and find envelope violations in order.
+
+    Returns (timeline, root, detail): timeline is printable "t+X.Xs  ..."
+    lines; root is the code of the FIRST violation that happened before the
+    point of no return (or "" if none); detail carries its numbers.
+    """
+    samples = ev.samples
+    t0 = samples[0].t
+    found: list[tuple[float, str, str, dict]] = []
+
+    # entry: was the throttle already pinned coming into the drift?
+    entry_win = [s for s in ev.pre if t0 - s.t <= 0.4] + \
+                [s for s in samples if s.t - t0 <= 0.3]
+    if entry_win:
+        entry_thr = sum(s.throttle for s in entry_win) / len(entry_win)
+        if entry_thr >= PIN_THR:
+            found.append((0.0, "entry_throttle",
+                          f"entered at {samples[0].speed_kmh:.0f} km/h with "
+                          f"throttle already {entry_thr:.0%}",
+                          {"thr": entry_thr,
+                           "speed": samples[0].speed_kmh}))
+
+    # throttle debt: integral of (throttle - sustainable top) while the
+    # angle keeps growing - catches "too much for this angle", not just 100%
+    debt, debt_start = 0.0, None
+    for a, b in zip(samples, samples[1:]):
+        dt = b.t - a.t
+        if not 0.0 < dt < 0.1 or abs(a.beta_deg) < SUSTAIN_BETA:
+            continue
+        growing = abs(b.beta_deg) >= abs(a.beta_deg) - 0.5
+        over = a.throttle - band_fn(a.beta_deg)[1]
+        if over > 0.05 and growing:
+            if debt_start is None:
+                debt_start = a
+            debt += over * dt
+            if debt >= DEBT_TRIGGER:
+                found.append((debt_start.t - t0, "throttle_debt",
+                              f"throttle {debt_start.throttle:.0%} at "
+                              f"{abs(debt_start.beta_deg):.0f}° - above what "
+                              f"~{band_fn(debt_start.beta_deg)[1]:.0%} sustains",
+                              {"thr": debt_start.throttle,
+                               "beta": abs(debt_start.beta_deg),
+                               "target": band_fn(debt_start.beta_deg)[1]}))
+                break
+        elif over <= 0:
+            debt, debt_start = 0.0, None
+
+    # steering exhausted: at full lock and the fronts still dragged
+    sat_since = None
+    for s in samples:
+        if abs(s.steer) >= STEER_SAT and s.cs_error > 0.5:
+            if sat_since is None:
+                sat_since = s
+            elif s.t - sat_since.t >= 0.2:
+                found.append((sat_since.t - t0, "steer_saturated",
+                              f"full counter-lock at "
+                              f"{abs(sat_since.beta_deg):.0f}° - steering "
+                              "had nothing left",
+                              {"beta": abs(sat_since.beta_deg)}))
+                break
+        else:
+            sat_since = None
+
+    # counter never applied: rotation established, steer stays near zero
+    first_rot = next((s for s in samples if abs(s.beta_deg) >= 15), None)
+    if first_rot is not None:
+        window = [s for s in samples if 0 <= s.t - first_rot.t <= 0.6]
+        best = max((s.steer * _sign(s.beta_deg) for s in window), default=0.0)
+        if window and best < COUNTER_MIN:
+            found.append((first_rot.t - t0, "counter_missing",
+                          f"no real counter-steer by "
+                          f"{abs(first_rot.beta_deg):.0f}° "
+                          f"(max {best:.0%} of lock)",
+                          {"beta": abs(first_rot.beta_deg)}))
+
+    # point of no return: past the recoverable angle and still rotating
+    ponr = None
+    for a, b in zip(samples, samples[1:]):
+        if abs(b.beta_deg) >= beta_max and abs(b.beta_deg) > abs(a.beta_deg):
+            ponr = b.t - t0
+            break
+
+    found.sort(key=lambda x: x[0])
+    causal = [f for f in found if ponr is None or f[0] <= ponr]
+    root_code = causal[0][1] if causal else ""
+    root_detail = causal[0][3] if causal else {}
+
+    timeline = [f"t+{t:4.1f}s  {text}" + ("   <- ROOT CAUSE"
+                if code == root_code and code else "")
+                for t, code, text, _ in found]
+    if ponr is not None:
+        timeline.append(f"t+{ponr:4.1f}s  crossed ~{beta_max:.0f}° - past "
+                        "recoverable, everything after is symptom")
+        timeline.sort(key=lambda line: float(line[2:line.index("s")]))
+    return timeline, root_code, root_detail
+
+
 def _lift_before(samples: list[CoachSample], t_end: float) -> CoachSample | None:
     """Find a throttle dump shortly before t_end."""
     window = [s for s in samples if t_end - 1.2 <= s.t <= t_end]
@@ -135,8 +255,17 @@ def _lift_before(samples: list[CoachSample], t_end: float) -> CoachSample | None
     return None
 
 
-def analyze(ev: DriftEvent, mode: str = "free") -> EventReport:
+def analyze(ev: DriftEvent, mode: str = "free",
+            calib: Calibration | None = None) -> EventReport:
     samples = ev.samples
+    car = samples[0].car_ordinal
+    if calib is not None:
+        band_fn = lambda b: calib.throttle_band(car, b)
+        beta_max = calib.beta_max(car)
+    else:
+        band_fn = lambda b: DEFAULT_BAND
+        beta_max = DEFAULT_BETA_MAX
+
     sustain = [s for s in samples if abs(s.beta_deg) >= SUSTAIN_BETA]
     core = sustain or samples
 
@@ -164,12 +293,22 @@ def analyze(ev: DriftEvent, mode: str = "free") -> EventReport:
 
     thr_std = math.sqrt(sum((x - thr_mean) ** 2 for x in thr) / len(thr))
 
+    timeline, root, detail = _causal_walk(ev, band_fn, beta_max)
+    ponr_s = None
+    for line in timeline:
+        if "past recoverable" in line:
+            ponr_s = float(line[2:line.index("s")])
+
     outcome, cause, verdict, info = _classify(ev, samples, cs_err, thr_mean)
     did, fix = _hud_detail(outcome, cause, info, cs_err * PEAK_SLIP_DEG,
                            scrub, lag, std_beta, thr_mean, thr_std,
                            ev.duration)
+    if outcome == "spin" and root:
+        cause, verdict, did, fix = _spin_from_root(root, detail)
+
     faults = _faults(outcome, cause, cs_err, scrub, lag, std_beta,
                      lifts, pct_full, pct_zero, mean_beta, thr_mean)
+    faults = _reconcile_faults(faults, root, timeline, detail)
     score = _score(outcome, std_beta, scrub, lag, lifts, ev.duration)
 
     return EventReport(
@@ -181,8 +320,51 @@ def analyze(ev: DriftEvent, mode: str = "free") -> EventReport:
         scrub_pct=scrub, steer_lag_ms=lag,
         thr_mean=thr_mean, thr_std=thr_std, thr_full_lifts=lifts,
         thr_pct_full=pct_full, thr_pct_zero=pct_zero,
-        score=score, verdict=verdict, did=did, fix=fix, faults=faults,
+        score=score, verdict=verdict, did=did, fix=fix,
+        root_cause=root, ponr_s=ponr_s, timeline=timeline, faults=faults,
     )
+
+
+def _spin_from_root(root: str, d: dict):
+    """Spin verdict/did/fix rewritten from the FIRST envelope violation."""
+    if root == "entry_throttle":
+        return ("throttle",
+                "SPIN - throttle pinned from entry",
+                f"entered {d['speed']:.0f} km/h at {d['thr']:.0%} throttle",
+                "enter at ~70% and trim as angle builds")
+    if root == "throttle_debt":
+        return ("throttle",
+                f"SPIN - too much throttle for {d['beta']:.0f}°",
+                f"held {d['thr']:.0%} where ~{d['target']:.0%} "
+                f"sustains {d['beta']:.0f}°",
+                f"trim toward {d['target']:.0%} passing {d['beta']:.0f}°")
+    if root == "steer_saturated":
+        return ("beyond-lock",
+                f"SPIN - beyond full lock at {d['beta']:.0f}°",
+                "full counter, rotation still grew",
+                "counter sooner + trim throttle earlier")
+    return ("no-counter",
+            "SPIN - counter never came",
+            f"barely any counter by {d.get('beta', 0):.0f}°",
+            "counter the instant rotation starts")
+
+
+def _reconcile_faults(faults: list[str], root: str, timeline: list[str],
+                      detail: dict) -> list[str]:
+    """Symptom faults must not contradict the root cause: never ask for
+    more counter-steer when the driver was already at full lock."""
+    saturated = any("full counter-lock" in line for line in timeline)
+    if saturated:
+        faults = [f for f in faults
+                  if not f.startswith(("Add ~", "Counter-steer was essentially"))]
+        faults.insert(0, "You DID reach full lock - the answer isn't more "
+                         "counter, it's less throttle / less entry speed.")
+    if root in ("entry_throttle", "throttle_debt"):
+        target = detail.get("target", DEFAULT_BAND[1])
+        faults.insert(0, f"Throttle is the root cause here: hold near "
+                         f"~{target:.0%} once the angle is set, and change "
+                         "it 10-15% at a time.")
+    return faults
 
 
 def _classify(ev: DriftEvent, samples, cs_err, thr_mean):

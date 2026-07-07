@@ -12,6 +12,7 @@ from pathlib import Path
 
 from forza_coach import config
 from forza_coach.coach.audio import AudioCoach
+from forza_coach.coach.calibration import Calibration
 from forza_coach.coach.live import LiveCoach
 from forza_coach.overlay.app import OverlayApp
 from forza_coach.telemetry.listener import TelemetryListener
@@ -45,7 +46,8 @@ def main() -> int:
         print("Is another instance already running?", file=sys.stderr)
         return 1
 
-    coach = LiveCoach()
+    calibration = Calibration(args.recordings / "calibration.json")
+    coach = LiveCoach(calibration=calibration)
     audio = AudioCoach(Path("assets/audio"), enabled=not args.no_audio)
     coach.on_cue = audio.on_cue
     coach.on_verdict = audio.on_verdict

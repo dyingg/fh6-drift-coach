@@ -79,6 +79,27 @@ Reaction time comes from cross-correlating steering rate against slip rate.
 Conventions were validated against real FH6 captures — see
 `forza_coach/coach/conventions.py`.
 
+### Root-cause analysis, not symptom blame
+
+Failed drifts are diagnosed by walking the timeline (including ~2 s of
+pre-drift entry context) against the car's **recoverability envelope** and
+blaming the FIRST input that left it: entry with throttle pinned, throttle
+above what sustains the current angle (an integral, so 85% held too long
+counts, not just 100%), steering saturated while fronts drag, or counter
+that never came. Past the recoverable angle everything is symptom and is
+excluded — and the coach never asks for more counter-steer when you were
+already at full lock (live it says `FULL LOCK — EASE THROTTLE` instead).
+Report cards print the timeline with the root cause and the point of no
+return.
+
+The envelope is **calibrated per car from your own driving**
+(`recordings/calibration.json`): every moment the angle holds steady
+teaches the sustainable throttle for that angle (the HUD throttle band
+slides with your current angle accordingly), and every recovered slide can
+raise the known recoverable angle. Feed old sessions in once with
+`python scripts/analyze_session.py <session> --calibrate`; live sessions
+learn automatically.
+
 ## Recording
 
 Hit **START RECORDING** on the overlay. Each session lands in `recordings/`
@@ -149,7 +170,8 @@ recordings/                      session dumps (gitignored)
 - [x] Drift detection + per-event scoring (same engine live and offline)
 - [x] Live coaching cues + instant verdicts on the overlay
 - [x] Direct G29 wheel capture as a second stream
-- [ ] Per-car calibration (steering lock, peak slip angle) for exact degrees
+- [x] Root-cause (causal) failure analysis with per-car envelope calibration
+- [ ] Per-car steering-lock/peak-slip calibration for exact degrees
 - [ ] Mode-specific scoring (roundabout radius fit, S-bend transition timing)
 - [ ] Hand-technique coaching from the wheel stream (self-centering flicks)
 - [ ] Session-over-session progress tracking

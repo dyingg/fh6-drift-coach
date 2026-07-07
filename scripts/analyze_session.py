@@ -18,14 +18,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from forza_coach.coach.calibration import Calibration
 from forza_coach.coach.conventions import enrich
-from forza_coach.coach.events import DriftDetector
+from forza_coach.coach.events import DriftDetector, DriftEvent
 from forza_coach.coach.metrics import EventReport, analyze
 
 
-def load_reports(session: Path, mode: str) -> list[EventReport]:
+def load_reports(session: Path, mode: str,
+                 calib: Calibration | None) -> list[tuple[DriftEvent, EventReport]]:
     detector = DriftDetector()
-    reports: list[EventReport] = []
+    out: list[tuple[DriftEvent, EventReport]] = []
     with open(session / "telemetry.jsonl", encoding="utf-8") as f:
         for line in f:
             sample = enrich(json.loads(line))
@@ -33,11 +35,11 @@ def load_reports(session: Path, mode: str) -> list[EventReport]:
                 continue
             event = detector.feed(sample)
             if event is not None:
-                reports.append(analyze(event, mode))
+                out.append((event, analyze(event, mode, calib)))
     event = detector.flush()
     if event is not None:
-        reports.append(analyze(event, mode))
-    return reports
+        out.append((event, analyze(event, mode, calib)))
+    return out
 
 
 def summarize(reports: list[EventReport]) -> list[str]:
@@ -77,6 +79,10 @@ def main() -> int:
                         help="session directory (default: latest)")
     parser.add_argument("--mode", default=None,
                         help="override the mode stored in meta.json")
+    parser.add_argument("--calibrate", action="store_true",
+                        help="also feed this session into the per-car "
+                             "envelope calibration (don't re-run on the "
+                             "same session, counts would double)")
     args = parser.parse_args()
 
     session = args.session
@@ -89,13 +95,21 @@ def main() -> int:
 
     meta = json.loads((session / "meta.json").read_text())
     mode = args.mode or meta.get("mode", "free")
+    calib = Calibration(session.parent / "calibration.json")
 
-    reports = load_reports(session, mode)
+    pairs = load_reports(session, mode, calib)
     print(f"Session {session}  (mode: {mode})")
-    if not reports:
+    if not pairs:
         print("No drift events found - is this a driving recording?")
         return 0
 
+    if args.calibrate:
+        for event, _ in pairs:
+            calib.observe_event(event.samples[0].car_ordinal,
+                                event.samples, event.spun)
+        print(f"Calibration updated: {calib.path}")
+
+    reports = [r for _, r in pairs]
     print("=" * 64)
     for i, r in enumerate(reports, 1):
         print(r.card(i))

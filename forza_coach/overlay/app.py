@@ -188,7 +188,8 @@ class OverlayApp:
         _rrect(c, THR_X0, 228, THR_X1, 244, 8, fill=theme.PANEL_HI, outline="")
         bx0 = THR_X0 + (THR_X1 - THR_X0) * THROTTLE_BAND[0]
         bx1 = THR_X0 + (THR_X1 - THR_X0) * THROTTLE_BAND[1]
-        c.create_rectangle(bx0, 228, bx1, 244, fill=theme.BORDER, outline="")
+        c.create_rectangle(bx0, 228, bx1, 244, fill=theme.BORDER, outline="",
+                           tags=("thrband",))
         c.create_rectangle(THR_X0, 230, THR_X0, 242, fill=theme.CYAN,
                            outline="", tags=("thrfill",))
         c.create_text(THR_X1 + 10, 236, anchor="w", text="0%",
@@ -388,13 +389,18 @@ class OverlayApp:
         self._coords("betafill", x1, 204, x2, 216)
         c.itemconfigure("betafill", fill=fill)
 
-        # Throttle bar: green in the target band while drifting
+        # Throttle bar: the target band tracks the calibrated sustainable
+        # range for the CURRENT angle, so it slides as the drift deepens
+        band = view.thr_target
+        self._coords("thrband",
+                     THR_X0 + (THR_X1 - THR_X0) * band[0], 228,
+                     THR_X0 + (THR_X1 - THR_X0) * band[1], 244)
         thr = max(0.0, min(1.0, view.throttle))
         tx = THR_X0 + (THR_X1 - THR_X0) * thr
         if view.in_drift:
-            if THROTTLE_BAND[0] <= thr <= THROTTLE_BAND[1]:
+            if band[0] <= thr <= band[1]:
                 tfill = theme.GREEN
-            elif thr > THROTTLE_BAND[1] and abs(beta) > 40:
+            elif thr > band[1] and abs(beta) > 40:
                 tfill = theme.RED
             else:
                 tfill = theme.AMBER

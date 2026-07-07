@@ -33,6 +33,9 @@ def main() -> int:
                         help="disable spoken coaching cues and verdicts")
     parser.add_argument("--record-button", type=int, default=config.RECORD_BUTTON,
                         help="wheel button that toggles recording (-1 disables)")
+    parser.add_argument("--no-wheel", action="store_true",
+                        help="don't read the wheel at all (disables the "
+                             "record hotkey and the wheel.jsonl stream)")
     args = parser.parse_args()
 
     # Crisp text on high-DPI displays.
@@ -54,11 +57,12 @@ def main() -> int:
     coach.on_cue = audio.on_cue
     coach.on_verdict = audio.on_verdict
 
-    wheel = WheelReader()
+    wheel = None if args.no_wheel else WheelReader()
     listener.on_packet = coach.feed
-    listener.on_recorder_change = wheel.set_recorder
+    if wheel is not None:
+        listener.on_recorder_change = wheel.set_recorder
+        wheel.start()
     listener.start()
-    wheel.start()
 
     app = OverlayApp(listener, coach, wheel, recordings_dir=args.recordings,
                      scale=args.scale, audio=audio,
@@ -66,7 +70,8 @@ def main() -> int:
     try:
         app.run()
     finally:
-        wheel.stop()
+        if wheel is not None:
+            wheel.stop()
         listener.stop()
     return 0
 

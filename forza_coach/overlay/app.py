@@ -12,6 +12,7 @@ did / the fix). Recording lives in a small footer pill.
 
 from __future__ import annotations
 
+import sys
 import time
 import tkinter as tk
 from pathlib import Path
@@ -103,6 +104,34 @@ class OverlayApp:
         if scale != 1.0:
             self.canvas.scale("all", 0, 0, scale, scale)
         self._select_mode(self.mode)
+        self._never_steal_focus()
+
+    def _never_steal_focus(self) -> None:
+        """Keep the game activated at all times (Windows). An activated
+        overlay knocks the game out of focus: its rendering hitches, its
+        force-feedback pauses, and Logitech G HUB swaps the wheel to the
+        desktop profile - the wheel suddenly feels heavy and the in-game
+        wheel settings look dead. WS_EX_NOACTIVATE still delivers every
+        mouse event (click, drag), it only stops the window from ever
+        taking activation; TOOLWINDOW keeps it out of Alt-Tab."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            self.root.update_idletasks()
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.root.winfo_id(), 2)  # GA_ROOT
+            get_style = getattr(user32, "GetWindowLongPtrW",
+                                user32.GetWindowLongW)
+            set_style = getattr(user32, "SetWindowLongPtrW",
+                                user32.SetWindowLongW)
+            GWL_EXSTYLE = -20
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW = 0x08000000, 0x00000080
+            style = get_style(hwnd, GWL_EXSTYLE)
+            set_style(hwnd, GWL_EXSTYLE,
+                      style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+        except Exception:
+            pass  # cosmetic hardening only - never fatal
 
     def _coords(self, tag: str, *pts: float) -> None:
         """canvas.coords() taking design-unit points."""

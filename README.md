@@ -5,8 +5,8 @@ overlay shows live coaching cues while you drift (counter-steer error,
 throttle faults, spin warnings) and posts a verdict the moment each drift
 ends. Recorded sessions get full post-session report cards.
 
-Pure Python standard library; `pygame` is optional for direct G29 wheel
-capture (`pip install pygame`).
+Pure Python standard library; `pygame` is optional and only used for the
+spoken audio cues (`pip install pygame`). Wheel capture is dependency-free.
 
 ## Quick start
 
@@ -126,13 +126,25 @@ learn automatically.
 Hit the **● REC** pill on the overlay — or **button 24 on the wheel**
 (G29: configurable with `--record-button N`, `-1` disables), so you never
 have to reach for the mouse mid-session. A toast confirms start/stop.
+
+**The coach never fights your wheel.** The wheel is read as a passive
+observer — raw shared-mode HID input reports, no DirectInput/SDL
+acquisition — so the game keeps exclusive control of force feedback and
+your in-game and G HUB wheel settings apply untouched. (SDL-based readers
+grab FFB wheels in exclusive mode and silently break the game's FFB —
+that's the classic "wheel suddenly feels heavy" bug.) The overlay window
+is also non-activating: clicking it never takes focus off the game, so
+FFB never pauses and G HUB never swaps to its desktop profile. If you
+want the wheel left completely alone, `--no-wheel` disables the reader
+(the record hotkey and `wheel.jsonl` with it).
+
 Each session lands in `recordings/` (gitignored):
 
 | File              | Contents                                                        |
 | ----------------- | --------------------------------------------------------------- |
 | `raw.fzd`         | Raw datagrams: `FZDUMP01` magic, then `<dH` (timestamp, length) + payload per packet |
 | `telemetry.jsonl` | One parsed packet per line with a `t` unix timestamp            |
-| `wheel.jsonl`     | (with a wheel connected) raw DirectInput axes/buttons at ~100 Hz |
+| `wheel.jsonl`     | (with a wheel connected) raw HID axes/buttons, up to 100 Hz on change |
 | `meta.json`       | Session summary: duration, packet count, mode, wheel device     |
 | `analysis.json`   | (after `analyze_session.py`) machine-readable event reports     |
 
@@ -170,7 +182,7 @@ forza_coach/
     packet.py                    Data Out packet parsing
     listener.py                  background UDP listener thread
     recorder.py                  session dumps (raw + jsonl + wheel + meta)
-    wheel.py                     direct G29 capture via DirectInput (optional)
+    wheel.py                     passive G29 capture via raw shared-mode HID
   coach/
     conventions.py               validated FH6 axes/signs/units + CoachSample
     events.py                    streaming drift-event detector

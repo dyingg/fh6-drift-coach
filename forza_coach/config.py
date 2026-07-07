@@ -10,3 +10,6 @@ DEFAULT_HOST = "0.0.0.0"
 
 # Where recording sessions are written (gitignored).
 RECORDINGS_DIR = Path("recordings")
+
+# Wheel button that toggles recording (G29 button 24; -1 disables).
+RECORD_BUTTON = 24

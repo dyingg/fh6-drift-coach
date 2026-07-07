@@ -27,6 +27,7 @@ class WheelReader(threading.Thread):
         self.device_name: str | None = None
         self._axes: list[float] = []
         self._buttons: list[int] = []
+        self._presses: set[int] = set()  # down-edges since last consume
 
     def run(self) -> None:
         os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
@@ -58,6 +59,7 @@ class WheelReader(threading.Thread):
             return
 
         interval = 1.0 / POLL_HZ
+        prev: list[int] = []
         while self._running:
             try:
                 pygame.event.pump()
@@ -66,8 +68,12 @@ class WheelReader(threading.Thread):
                 buttons = [js.get_button(i) for i in range(js.get_numbuttons())]
             except Exception:
                 break  # device unplugged or pygame torn down at shutdown
+            edges = {i for i, b in enumerate(buttons)
+                     if b and (i >= len(prev) or not prev[i])}
+            prev = buttons
             with self._lock:
                 self._axes, self._buttons = axes, buttons
+                self._presses |= edges
                 recorder = self._recorder
             if recorder is not None:
                 recorder.write_wheel(ts, axes, buttons)
@@ -81,6 +87,13 @@ class WheelReader(threading.Thread):
     def snapshot(self) -> tuple[str | None, list[float]]:
         with self._lock:
             return self.device_name, list(self._axes)
+
+    def consume_presses(self) -> set[int]:
+        """Button indices that had a press (down-edge) since the last call.
+        Polled by the UI tick - keeps tkinter interaction on the UI thread."""
+        with self._lock:
+            presses, self._presses = self._presses, set()
+        return presses
 
     def stop(self) -> None:
         self._running = False

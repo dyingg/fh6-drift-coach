@@ -31,6 +31,8 @@ def main() -> int:
                         help="UI scale factor (default: auto from screen size)")
     parser.add_argument("--no-audio", action="store_true",
                         help="disable spoken coaching cues and verdicts")
+    parser.add_argument("--record-button", type=int, default=config.RECORD_BUTTON,
+                        help="wheel button that toggles recording (-1 disables)")
     args = parser.parse_args()
 
     # Crisp text on high-DPI displays.
@@ -59,7 +61,8 @@ def main() -> int:
     wheel.start()
 
     app = OverlayApp(listener, coach, wheel, recordings_dir=args.recordings,
-                     scale=args.scale, audio=audio)
+                     scale=args.scale, audio=audio,
+                     record_button=args.record_button)
     try:
         app.run()
     finally:

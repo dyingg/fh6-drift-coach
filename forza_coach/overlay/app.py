@@ -54,11 +54,13 @@ def _rrect(canvas: tk.Canvas, x1, y1, x2, y2, r, **kw):
 class OverlayApp:
     def __init__(self, listener: TelemetryListener, coach: LiveCoach,
                  wheel: WheelReader | None, recordings_dir: Path,
-                 scale: float | None = None, audio=None):
+                 scale: float | None = None, audio=None,
+                 record_button: int = -1):
         self.listener = listener
         self.coach = coach
         self.wheel = wheel
         self.audio = audio
+        self.record_button = record_button
         self.recordings_dir = recordings_dir
         self.mode = coach.mode
         self._drag: tuple[int, int] | None = None
@@ -303,6 +305,9 @@ class OverlayApp:
             if self.wheel is not None and self.wheel.device_name:
                 extra["wheel_device"] = self.wheel.device_name
             self.listener.start_recording(self.recordings_dir, extra)
+            # confirmation you can catch in peripheral vision - the wheel
+            # hotkey means eyes are usually on the road, not the pill
+            self._toast(f"● RECORDING ({self.mode.upper()})", seconds=3)
 
     def _toast(self, text: str, seconds: float = 8.0) -> None:
         self.canvas.itemconfigure("toast", text=text)
@@ -313,6 +318,11 @@ class OverlayApp:
     def _tick(self) -> None:
         snap = self.listener.snapshot()
         self._blink = not self._blink
+        # Wheel hotkey: presses are collected on the wheel thread and
+        # consumed here so all tkinter work stays on the UI thread.
+        if self.wheel is not None and self.record_button >= 0:
+            if self.record_button in self.wheel.consume_presses():
+                self._toggle_recording()
         self._update_connection(snap)
         self._update_stats(snap)
         self._update_coach()

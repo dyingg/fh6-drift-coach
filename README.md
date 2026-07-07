@@ -102,8 +102,10 @@ learn automatically.
 
 ## Recording
 
-Hit **START RECORDING** on the overlay. Each session lands in `recordings/`
-(gitignored):
+Hit the **● REC** pill on the overlay — or **button 24 on the wheel**
+(G29: configurable with `--record-button N`, `-1` disables), so you never
+have to reach for the mouse mid-session. A toast confirms start/stop.
+Each session lands in `recordings/` (gitignored):
 
 | File              | Contents                                                        |
 | ----------------- | --------------------------------------------------------------- |

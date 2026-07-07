@@ -52,7 +52,9 @@ Live, on the overlay:
   `SNAP - you lifted at 30°`, `SPIN - too much throttle for 31°`,
   `HELD 4.2s @ 27° ✓` — plus a phase strip
   (`ENTRY ✓ CATCH ✓ SUSTAIN ✗ EXIT ✓`) showing which part of the drift
-  went wrong.
+  went wrong. The **◀ ▶** arrows page back through every verdict of the
+  session (a momentum chain closes two drifts back-to-back and the newest
+  takes the panel); stepping past the newest returns to live follow.
 
 Every live cue is also **spoken** (neural TTS, panned toward the direction
 you need to steer for the counter cue), because reading mid-drift is

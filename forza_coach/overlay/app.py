@@ -66,6 +66,7 @@ class OverlayApp:
         self._drag: tuple[int, int] | None = None
         self._blink = False
         self._toast_until = 0.0
+        self._browse: int | None = None  # report index; None = follow latest
 
         root = tk.Tk()
         self.root = root
@@ -202,11 +203,22 @@ class OverlayApp:
                       fill=theme.MUTED, font=font(22, "bold", "italic"),
                       tags=("cue",))
 
-        # Last-drift verdict block: headline / YOU / FIX
+        # Last-drift verdict block: headline / YOU / FIX. The ◀ ▶ arrows
+        # page through earlier verdicts - a momentum chain closes two
+        # events back-to-back and the newest one takes over the HUD.
         c.create_text(24, 286, anchor="w", text="LAST DRIFT",
-                      fill=theme.MUTED, font=font(9, "bold"))
-        c.create_text(W - 24, 286, anchor="e", text="",
+                      fill=theme.MUTED, font=font(9, "bold"),
+                      tags=("histlabel",))
+        c.create_text(W - 24 - 56, 286, anchor="e", text="",
                       fill=theme.MUTED, font=font(9, "bold"), tags=("events",))
+        _rrect(c, W - 24 - 48, 277, W - 24 - 26, 295, 8, fill=theme.PANEL_HI,
+               outline="", tags=("histprev",))
+        c.create_text(W - 24 - 37, 286, text="◀", fill=theme.MUTED,
+                      font=font(9, "bold"), tags=("histprev", "histprevlbl"))
+        _rrect(c, W - 24 - 22, 277, W - 24, 295, 8, fill=theme.PANEL_HI,
+               outline="", tags=("histnext",))
+        c.create_text(W - 24 - 11, 286, text="▶", fill=theme.MUTED,
+                      font=font(9, "bold"), tags=("histnext", "histnextlbl"))
         c.create_text(W / 2, 304, text="—", fill=theme.MUTED,
                       font=font(18, "bold", "italic"), tags=("verdict",))
         # Phase strip: entry / catch / sustain / exit judged ✓ or ✗
@@ -259,6 +271,12 @@ class OverlayApp:
             self.audio.muted = not self.audio.muted
             self._restyle_mute()
             return
+        if "histprev" in tags:
+            self._hist_step(-1)
+            return
+        if "histnext" in tags:
+            self._hist_step(+1)
+            return
         for tag in tags:
             if tag.startswith("chip:"):
                 self._select_mode(tag.split(":", 1)[1])
@@ -270,6 +288,18 @@ class OverlayApp:
         if self._drag:
             dx, dy = self._drag
             self.root.geometry(f"+{event.x_root - dx}+{event.y_root - dy}")
+
+    def _hist_step(self, delta: int) -> None:
+        """Page through past drift verdicts. Stepping forward past the
+        newest returns to live follow (new drifts take the panel again)."""
+        reports = self.coach.reports()
+        if not reports:
+            return
+        latest = len(reports) - 1
+        cur = latest if self._browse is None else min(self._browse, latest)
+        idx = max(0, min(latest, cur + delta))
+        self._browse = None if idx >= latest else idx
+        self._update_coach()
 
     def _select_mode(self, key: str) -> None:
         self.mode = key
@@ -433,14 +463,30 @@ class OverlayApp:
             c.itemconfigure("cue", text="DRIFT TO GET LIVE CUES",
                             fill=theme.MUTED)
 
-        if view.verdict:
-            c.itemconfigure("verdict", text=view.verdict,
-                            fill=_LEVEL_COLOR[view.verdict_level])
+        # Verdict block: live-follow by default; ◀ ▶ pin an older report
+        report, verdict, level = view.last_report, view.verdict, view.verdict_level
+        did, fix = view.did, view.fix
+        label, label_fill = "LAST DRIFT", theme.MUTED
+        if self._browse is not None:
+            reports = self.coach.reports()
+            if reports:
+                idx = min(self._browse, len(reports) - 1)
+                report = reports[idx]
+                verdict, did, fix = report.verdict, report.did, report.fix
+                level = ("danger" if report.outcome in ("snap", "spin")
+                         else "warn" if report.outcome == "faded" else "ok")
+                label = f"DRIFT {idx + 1}/{len(reports)}"
+                label_fill = theme.AMBER
+            else:
+                self._browse = None
+        c.itemconfigure("histlabel", text=label, fill=label_fill)
+        if verdict:
+            c.itemconfigure("verdict", text=verdict,
+                            fill=_LEVEL_COLOR[level])
             c.itemconfigure("didlabel", text="YOU")
-            c.itemconfigure("did", text=view.did.upper())
+            c.itemconfigure("did", text=did.upper())
             c.itemconfigure("fixlabel", text="FIX")
-            c.itemconfigure("fixline", text=view.fix.upper())
-        report = view.last_report
+            c.itemconfigure("fixline", text=fix.upper())
         if report is not None and report.phases:
             for i, p in enumerate(report.phases[:4]):
                 if p.ok is None:
@@ -454,6 +500,12 @@ class OverlayApp:
         c.itemconfigure(
             "events",
             text=f"{view.events} EVENTS" if view.events else "")
+        prev_on = view.events >= 2 and self._browse != 0
+        c.itemconfigure("histprevlbl",
+                        fill=theme.TEXT if prev_on else theme.MUTED)
+        c.itemconfigure("histnextlbl",
+                        fill=theme.TEXT if self._browse is not None
+                        else theme.MUTED)
 
     def _update_rec_button(self, snap: Snapshot) -> None:
         c = self.canvas

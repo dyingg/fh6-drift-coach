@@ -94,6 +94,7 @@ class LiveCoach:
         self._verdict = ""
         self._verdict_level = "ok"
         self._last_report: EventReport | None = None
+        self._reports: list[EventReport] = []  # full session history
         self._events = 0
 
         # Audio hooks, wired externally (like listener.on_packet). Fired from
@@ -143,6 +144,7 @@ class LiveCoach:
             report = analyze(done, self._mode, self._calibration)
             self._events += 1
             self._last_report = report
+            self._reports.append(report)
             self._verdict = report.verdict
             self._verdict_level = (
                 "danger" if report.outcome in ("snap", "spin")
@@ -235,6 +237,12 @@ class LiveCoach:
                 events=self._events,
                 mode=self._mode,
             )
+
+    def reports(self) -> list[EventReport]:
+        """Every drift analyzed this session, oldest first - lets the UI
+        browse back when a momentum chain posts two verdicts in a row."""
+        with self._lock:
+            return list(self._reports)
 
     @property
     def mode(self) -> str:

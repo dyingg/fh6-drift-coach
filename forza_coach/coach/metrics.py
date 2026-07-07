@@ -632,15 +632,21 @@ def analyze(ev: DriftEvent, mode: str = "free",
 
 def _reconcile_faults(faults: list[str], root: Phase | None,
                       timeline: list[str]) -> list[str]:
-    """Symptom faults must not contradict the root cause: never ask for
-    more counter-steer when the driver was already at full lock."""
+    """Symptom faults must not contradict the root cause: never ask for more
+    counter-steer when the driver was already at full lock, or when the root
+    cause was throttle (the catch phase already cleared the steering - the
+    high cs-error is just the fronts washed out by an angle throttle built)."""
+    counter_blame = ("Add ~", "Counter-steer was essentially",
+                     "Counter-steer is late")
     saturated = any("full counter-lock" in line for line in timeline)
+    throttle_root = (root is not None
+                     and root.fault in ("entry_throttle", "throttle"))
+    if saturated or throttle_root:
+        faults = [f for f in faults if not f.startswith(counter_blame)]
     if saturated:
-        faults = [f for f in faults
-                  if not f.startswith(("Add ~", "Counter-steer was essentially"))]
         faults.insert(0, "You DID reach full lock - the answer isn't more "
                          "counter, it's less throttle / less entry speed.")
-    if root is not None and root.fault in ("entry_throttle", "throttle"):
+    if throttle_root:
         target = root.data.get("target", DEFAULT_BAND[1])
         faults.insert(0, f"Throttle is the root cause here: hold near "
                          f"~{target:.0%} once the angle is set, and change "

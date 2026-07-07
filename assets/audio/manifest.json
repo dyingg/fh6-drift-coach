@@ -1,0 +1,50 @@
+{
+  "counter": {
+    "file": "counter.wav",
+    "text": "Counter!"
+  },
+  "unwind": {
+    "file": "unwind.wav",
+    "text": "Unwind"
+  },
+  "throttle": {
+    "file": "throttle.wav",
+    "text": "Throttle!"
+  },
+  "ease_off": {
+    "file": "ease_off.wav",
+    "text": "Ease off"
+  },
+  "back_off": {
+    "file": "back_off.wav",
+    "text": "Back off!"
+  },
+  "snap_lifted": {
+    "file": "snap_lifted.wav",
+    "text": "Snap — you lifted"
+  },
+  "snap_over": {
+    "file": "snap_over.wav",
+    "text": "Snap — over-corrected"
+  },
+  "snap_commit": {
+    "file": "snap_commit.wav",
+    "text": "Snap — commit more"
+  },
+  "spin_throttle": {
+    "file": "spin_throttle.wav",
+    "text": "Spin — too much throttle"
+  },
+  "spin_counter": {
+    "file": "spin_counter.wav",
+    "text": "Spin — counter faster"
+  },
+  "faded": {
+    "file": "faded.wav",
+    "text": "Faded — stay on it"
+  },
+  "held": {
+    "file": "held.wav",
+    "text": "Held it!"
+  }
+}

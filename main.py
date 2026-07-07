@@ -11,8 +11,11 @@ import sys
 from pathlib import Path
 
 from forza_coach import config
+from forza_coach.coach.audio import AudioCoach
+from forza_coach.coach.live import LiveCoach
 from forza_coach.overlay.app import OverlayApp
 from forza_coach.telemetry.listener import TelemetryListener
+from forza_coach.telemetry.wheel import WheelReader
 
 
 def main() -> int:
@@ -23,6 +26,10 @@ def main() -> int:
                         help="interface to bind (0.0.0.0 = all)")
     parser.add_argument("--recordings", type=Path, default=config.RECORDINGS_DIR,
                         help="directory for recording sessions")
+    parser.add_argument("--scale", type=float, default=None,
+                        help="UI scale factor (default: auto from screen size)")
+    parser.add_argument("--no-audio", action="store_true",
+                        help="disable spoken coaching cues and verdicts")
     args = parser.parse_args()
 
     # Crisp text on high-DPI displays.
@@ -37,12 +44,24 @@ def main() -> int:
         print(f"Could not bind UDP {args.host}:{args.port} - {exc}", file=sys.stderr)
         print("Is another instance already running?", file=sys.stderr)
         return 1
-    listener.start()
 
-    app = OverlayApp(listener, recordings_dir=args.recordings)
+    coach = LiveCoach()
+    audio = AudioCoach(Path("assets/audio"), enabled=not args.no_audio)
+    coach.on_cue = audio.on_cue
+    coach.on_verdict = audio.on_verdict
+
+    wheel = WheelReader()
+    listener.on_packet = coach.feed
+    listener.on_recorder_change = wheel.set_recorder
+    listener.start()
+    wheel.start()
+
+    app = OverlayApp(listener, coach, wheel, recordings_dir=args.recordings,
+                     scale=args.scale, audio=audio)
     try:
         app.run()
     finally:
+        wheel.stop()
         listener.stop()
     return 0
 

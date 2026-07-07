@@ -26,9 +26,19 @@ RED = "#ff3b4a"       # no signal / recording dot
 FONT = "Segoe UI"     # display font, used bold + italic
 MONO = "Consolas"     # numeric readouts
 
+# Global UI scale, set once at startup (auto from screen size or --scale).
+SCALE = 1.0
+
+
+def set_scale(k: float) -> None:
+    global SCALE
+    SCALE = k
+
 
 def font(px: int, *mods: str, mono: bool = False) -> tuple:
     """Pixel-sized tkinter font (negative size = pixels, immune to DPI
-    scaling) so text can't outgrow the canvas layout on scaled displays."""
-    return (MONO if mono else FONT, -px, " ".join(mods)) if mods \
-        else (MONO if mono else FONT, -px)
+    scaling) so text can't outgrow the canvas layout on scaled displays.
+    Sizes follow the global UI scale."""
+    size = -round(px * SCALE)
+    return (MONO if mono else FONT, size, " ".join(mods)) if mods \
+        else (MONO if mono else FONT, size)

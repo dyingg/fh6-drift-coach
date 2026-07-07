@@ -8,6 +8,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from .packet import parse_packet
 from .recorder import Recorder
@@ -45,6 +46,10 @@ class TelemetryListener(threading.Thread):
         self._recorder: Recorder | None = None
         self._running = True
 
+        # Wired by main.py; both may be None.
+        self.on_packet: Callable[[dict], None] | None = None
+        self.on_recorder_change: Callable[[Recorder | None], None] | None = None
+
     # -- thread body ---------------------------------------------------------
 
     def run(self) -> None:
@@ -58,6 +63,7 @@ class TelemetryListener(threading.Thread):
 
             ts = time.time()
             parsed = parse_packet(data)
+            parsed["t"] = ts
             with self._lock:
                 self._latest = parsed
                 self._last_ts = ts
@@ -66,6 +72,8 @@ class TelemetryListener(threading.Thread):
                 self._recent.append(ts)
                 if self._recorder is not None:
                     self._recorder.write(ts, data, parsed)
+            if self.on_packet is not None:
+                self.on_packet(parsed)
 
     # -- control (called from the UI thread) ---------------------------------
 
@@ -84,15 +92,20 @@ class TelemetryListener(threading.Thread):
                 rec_packets=rec.packets if rec else 0,
             )
 
-    def start_recording(self, root_dir: Path) -> Path:
-        recorder = Recorder(root_dir, self.host, self.port)
+    def start_recording(self, root_dir: Path,
+                        extra_meta: dict | None = None) -> Path:
+        recorder = Recorder(root_dir, self.host, self.port, extra_meta)
         with self._lock:
             self._recorder = recorder
+        if self.on_recorder_change is not None:
+            self.on_recorder_change(recorder)
         return recorder.session_dir
 
     def stop_recording(self) -> dict | None:
         with self._lock:
             recorder, self._recorder = self._recorder, None
+        if self.on_recorder_change is not None:
+            self.on_recorder_change(None)
         return recorder.close() if recorder else None
 
     def stop(self) -> None:

@@ -1,11 +1,12 @@
 # Forza Horizon 6 — Drift Coach
 
-Proof of concept for a drift coach driven by Forza's **Data Out** UDP telemetry.
-Current scope: an always-on-top overlay that shows whether telemetry is being
-received correctly, plus a **record** button that dumps the stream to disk.
-Those dumps become the test data for the coaching logic later.
+A drift coach driven by Forza's **Data Out** UDP telemetry. An always-on-top
+overlay shows live coaching cues while you drift (counter-steer error,
+throttle faults, spin warnings) and posts a verdict the moment each drift
+ends. Recorded sessions get full post-session report cards.
 
-No external dependencies — pure Python standard library (tkinter, sockets).
+Pure Python standard library; `pygame` is optional for direct G29 wheel
+capture (`pip install pygame`).
 
 ## Quick start
 
@@ -32,9 +33,51 @@ visible on top of it.
 python scripts/send_fake_telemetry.py
 ```
 
-This simulates a drifting car at 60 Hz in the Horizon packet format. The
-overlay should flip to RECEIVING, show live speed/RPM/gear/drift angle, and
-recording should work exactly as it will with the real game.
+This plays a scripted 26-second loop (clean drift → lift snap → pinned-throttle
+spin) in the Horizon packet format, exercising every live cue and verdict.
+Don't run it while the game is also streaming to the same port — the listener
+merges every packet it receives, so the two streams would interleave.
+
+## The coach
+
+Live, on the overlay:
+
+- **Mode chips** — FREE / ROUND / CORNER / S-BEND. Tells the analyzer your
+  intent; stored in the session metadata.
+- **Drift-angle bar** — fills left/right with the body slip angle; amber past
+  45°, red past 55°.
+- **Cue line** — one instruction about right now: `MORE COUNTER-STEER +8°`,
+  `UNWIND STEERING`, `STAY ON THROTTLE`, `EASE OFF — ABOUT TO SPIN`.
+- **Last-drift verdict** — posted the instant a drift ends:
+  `SNAP - you lifted at 30°`, `SPIN - throttle pinned past 89°`,
+  `HELD 4.2s @ 27° ✓`.
+
+Every live cue is also **spoken** (neural TTS, panned toward the direction
+you need to steer for the counter cue), because reading mid-drift is
+impossible. Verdicts are read aloud as the drift ends. The ♪ pill next to
+REC mutes; `--no-audio` disables entirely. Regenerate the voice pack with
+`python scripts/generate_audio.py` (needs `pip install edge-tts` + internet;
+clips in `assets/audio/` are committed so users never have to).
+
+Post-session, with per-drift report cards and recurring-fault summary:
+
+```
+python scripts/analyze_session.py                    # latest session
+python scripts/analyze_session.py recordings/<dir>
+```
+
+The same detector/metrics power both paths (`forza_coach/coach/`), so the
+recordings you make are exactly what tunes the live coaching.
+
+### How it reads the telemetry
+
+Steering is judged by the **front tire slip angle** (fronts near zero =
+counter-steer correct; dragged with the slide = add counter-steer; flipped
+past it = unwind). Throttle is judged by **rear slip** and its history
+(full lifts mid-drift cause snaps; pinned throttle past ~40° causes spins).
+Reaction time comes from cross-correlating steering rate against slip rate.
+Conventions were validated against real FH6 captures — see
+`forza_coach/coach/conventions.py`.
 
 ## Recording
 
@@ -45,7 +88,9 @@ Hit **START RECORDING** on the overlay. Each session lands in `recordings/`
 | ----------------- | --------------------------------------------------------------- |
 | `raw.fzd`         | Raw datagrams: `FZDUMP01` magic, then `<dH` (timestamp, length) + payload per packet |
 | `telemetry.jsonl` | One parsed packet per line with a `t` unix timestamp            |
-| `meta.json`       | Session summary: duration, packet count, formats seen           |
+| `wheel.jsonl`     | (with a wheel connected) raw DirectInput axes/buttons at ~100 Hz |
+| `meta.json`       | Session summary: duration, packet count, mode, wheel device     |
+| `analysis.json`   | (after `analyze_session.py`) machine-readable event reports     |
 
 `raw.fzd` is the ground truth — if FH6's packet layout turns out to differ
 from what we assume, the raw dumps stay fully reusable.
@@ -63,40 +108,48 @@ Forza titles send one fixed-size little-endian packet per physics tick:
 
 - **232 B** "Sled" — physics core (RPM, velocity, slip angles, ...)
 - **311 B** "Dash" — Sled + dash block (speed, gear, inputs) at offset 232
-- **324 B** "Horizon" — Sled + 12 unknown bytes + dash block at offset 244 (FH4/FH5)
+- **324 B** "Horizon" — Sled + 12 unknown bytes + dash block at offset 244
 
-FH6 is expected to use the Horizon layout. Unknown packet sizes are still
-accepted: the sled portion is parsed and the raw bytes are recorded, and the
-overlay displays the observed size/format so we can adapt
-`forza_coach/telemetry/packet.py` if needed.
-
-Drift angle shown on the overlay is the body slip angle,
-`atan2(local_vel_x, local_vel_z)` — the angle between where the car points
-and where it is actually travelling.
+**FH6 confirmed (real captures):** 324 B Horizon layout at a variable
+60–80 Hz (appears frame-rate tied — never assume a fixed rate), velocity in
+local space, yaw rate on `ang_vel_y`, gear 11 = neutral. Full conventions in
+`forza_coach/coach/conventions.py`. Unknown packet sizes are still accepted
+and recorded raw.
 
 ## Project layout
 
 ```
-main.py                          entry point (listener + overlay)
+main.py                          entry point (listener + coach + wheel + overlay)
 forza_coach/
   config.py                      defaults (port, recordings dir)
   telemetry/
     packet.py                    Data Out packet parsing
     listener.py                  background UDP listener thread
-    recorder.py                  session dumps (raw + jsonl + meta)
+    recorder.py                  session dumps (raw + jsonl + wheel + meta)
+    wheel.py                     direct G29 capture via DirectInput (optional)
+  coach/
+    conventions.py               validated FH6 axes/signs/units + CoachSample
+    events.py                    streaming drift-event detector
+    metrics.py                   per-event scoring, faults, verdicts
+    live.py                      live cue/verdict state machine for the HUD
   overlay/
     theme.py                     FH6-inspired palette/fonts
     app.py                       tkinter overlay window
 scripts/
-  send_fake_telemetry.py         fake 60 Hz drift stream for testing
+  send_fake_telemetry.py         scripted drift scenario for testing
   inspect_recording.py           summarize/validate a recorded session
+  analyze_session.py             post-session drift report cards
 recordings/                      session dumps (gitignored)
 ```
 
 ## Roadmap
 
 - [x] Telemetry in, verified visually, recorded to disk
-- [ ] Validate real FH6 packet layout against a live capture
-- [ ] Drift detection (slip angle, angle sustain, transitions) on recordings
-- [ ] Live coaching cues on the overlay (entry speed, angle, throttle timing)
-- [ ] Session scoring and progress tracking
+- [x] Validate real FH6 packet layout against a live capture
+- [x] Drift detection + per-event scoring (same engine live and offline)
+- [x] Live coaching cues + instant verdicts on the overlay
+- [x] Direct G29 wheel capture as a second stream
+- [ ] Per-car calibration (steering lock, peak slip angle) for exact degrees
+- [ ] Mode-specific scoring (roundabout radius fit, S-bend transition timing)
+- [ ] Hand-technique coaching from the wheel stream (self-centering flicks)
+- [ ] Session-over-session progress tracking

@@ -39,6 +39,11 @@ def _bin_key(beta: float) -> str | None:
     return None
 
 
+def _band_of(slot: dict) -> tuple[float, float]:
+    mean = slot["sum"] / slot["n"]
+    return (max(0.15, mean - BAND_HALF_WIDTH), min(1.0, mean + BAND_HALF_WIDTH))
+
+
 class Calibration:
     """Thread-safe (observed from the telemetry thread, read from anywhere)."""
 
@@ -62,24 +67,31 @@ class Calibration:
         return DEFAULT_BETA_MAX
 
     def throttle_band(self, car: int, beta: float) -> tuple[float, float]:
-        """Sustainable throttle range for this car at this slip angle."""
+        """Sustainable throttle range for this car at this slip angle.
+
+        When the exact bin hasn't accumulated enough samples, fall back to
+        the closest LEARNED bin below this angle: sustainable throttle only
+        drops as the angle grows, so a lower-angle band is a valid ceiling -
+        far closer to the truth than the loose default. This matters most
+        past 36°, exactly where spins develop and bins are thinnest.
+        """
         key = _bin_key(beta)
         with self._lock:
             bins = self._cars.get(str(car), {}).get("throttle_bins", {})
             b = bins.get(key) if key else None
             if b and b["n"] >= MIN_BIN_SAMPLES:
-                mean = b["sum"] / b["n"]
-                lo = max(0.15, mean - BAND_HALF_WIDTH)
-                hi = min(1.0, mean + BAND_HALF_WIDTH)
-                return (lo, hi)
+                return _band_of(b)
+            best = None
+            for k, slot in bins.items():
+                if slot["n"] < MIN_BIN_SAMPLES:
+                    continue
+                lo, hi = k.split("-")
+                center = (float(lo) + float(hi)) / 2
+                if center <= abs(beta) and (best is None or center > best[0]):
+                    best = (center, slot)
+            if best is not None:
+                return _band_of(best[1])
         return DEFAULT_BAND
-
-    def is_learned(self, car: int, beta: float) -> bool:
-        key = _bin_key(beta)
-        with self._lock:
-            bins = self._cars.get(str(car), {}).get("throttle_bins", {})
-            b = bins.get(key) if key else None
-            return bool(b and b["n"] >= MIN_BIN_SAMPLES)
 
     # -- learning ----------------------------------------------------------------
 

@@ -207,15 +207,19 @@ class OverlayApp:
                       fill=theme.MUTED, font=font(9, "bold"))
         c.create_text(W - 24, 286, anchor="e", text="",
                       fill=theme.MUTED, font=font(9, "bold"), tags=("events",))
-        c.create_text(W / 2, 306, text="—", fill=theme.MUTED,
+        c.create_text(W / 2, 304, text="—", fill=theme.MUTED,
                       font=font(18, "bold", "italic"), tags=("verdict",))
-        c.create_text(24, 330, anchor="w", text="", fill=theme.MUTED,
+        # Phase strip: entry / catch / sustain / exit judged ✓ or ✗
+        for i, x in enumerate((24, 96, 168, 254)):
+            c.create_text(x, 322, anchor="w", text="",
+                          font=font(10, "bold"), tags=(f"phase{i}",))
+        c.create_text(24, 340, anchor="w", text="", fill=theme.MUTED,
                       font=font(10, "bold"), tags=("didlabel",))
-        c.create_text(56, 330, anchor="w", text="", fill=theme.TEXT,
+        c.create_text(56, 340, anchor="w", text="", fill=theme.TEXT,
                       font=font(13), tags=("did",))
-        c.create_text(24, 351, anchor="w", text="", fill=theme.MUTED,
+        c.create_text(24, 358, anchor="w", text="", fill=theme.MUTED,
                       font=font(10, "bold"), tags=("fixlabel",))
-        c.create_text(56, 351, anchor="w", text="", fill=theme.CYAN,
+        c.create_text(56, 358, anchor="w", text="", fill=theme.CYAN,
                       font=font(13), tags=("fixline",))
 
         # Footer: status text + small record pill
@@ -436,6 +440,17 @@ class OverlayApp:
             c.itemconfigure("did", text=view.did.upper())
             c.itemconfigure("fixlabel", text="FIX")
             c.itemconfigure("fixline", text=view.fix.upper())
+        report = view.last_report
+        if report is not None and report.phases:
+            for i, p in enumerate(report.phases[:4]):
+                if p.ok is None:
+                    mark, color = "—", theme.MUTED
+                elif p.ok:
+                    mark, color = "✓", theme.GREEN
+                else:
+                    mark, color = "✗", theme.RED
+                c.itemconfigure(f"phase{i}",
+                                text=f"{p.name.upper()} {mark}", fill=color)
         c.itemconfigure(
             "events",
             text=f"{view.events} EVENTS" if view.events else "")

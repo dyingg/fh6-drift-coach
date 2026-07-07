@@ -49,8 +49,10 @@ Live, on the overlay:
 - **Cue line** — one instruction about right now: `MORE COUNTER-STEER +8°`,
   `UNWIND STEERING`, `STAY ON THROTTLE`, `EASE OFF — ABOUT TO SPIN`.
 - **Last-drift verdict** — posted the instant a drift ends:
-  `SNAP - you lifted at 30°`, `SPIN - throttle pinned past 89°`,
-  `HELD 4.2s @ 27° ✓`.
+  `SNAP - you lifted at 30°`, `SPIN - too much throttle for 31°`,
+  `HELD 4.2s @ 27° ✓` — plus a phase strip
+  (`ENTRY ✓ CATCH ✓ SUSTAIN ✗ EXIT ✓`) showing which part of the drift
+  went wrong.
 
 Every live cue is also **spoken** (neural TTS, panned toward the direction
 you need to steer for the counter cue), because reading mid-drift is
@@ -75,22 +77,39 @@ Steering is judged by the **front tire slip angle** (fronts near zero =
 counter-steer correct; dragged with the slide = add counter-steer; flipped
 past it = unwind). Throttle is judged by **rear slip** and its history
 (full lifts mid-drift cause snaps; pinned throttle past ~40° causes spins).
-Reaction time comes from cross-correlating steering rate against slip rate.
+Reaction time is measured directly: rotation onset to the first
+correct-direction counter-steer (correlation methods report nonsense once
+the wheel saturates in a spin, so they're not used).
 Conventions were validated against real FH6 captures — see
 `forza_coach/coach/conventions.py`.
 
-### Root-cause analysis, not symptom blame
+### Phase analysis: root cause, not symptom blame
 
-Failed drifts are diagnosed by walking the timeline (including ~2 s of
-pre-drift entry context) against the car's **recoverability envelope** and
-blaming the FIRST input that left it: entry with throttle pinned, throttle
-above what sustains the current angle (an integral, so 85% held too long
-counts, not just 100%), steering saturated while fronts drag, or counter
-that never came. Past the recoverable angle everything is symptom and is
-excluded — and the coach never asks for more counter-steer when you were
-already at full lock (live it says `FULL LOCK — EASE THROTTLE` instead).
-Report cards print the timeline with the root cause and the point of no
-return.
+Every drift is judged as four phases, in causal order, each marked
+correct or wrong from the telemetry (including ~2 s of pre-drift entry
+context):
+
+| Phase       | What's judged                                                       |
+| ----------- | ------------------------------------------------------------------- |
+| **entry**   | speed and throttle on initiation (thrown in with the pedal pinned?) |
+| **catch**   | the first steering response — direction, and reaction time measured directly from rotation onset to the first real counter-steer |
+| **sustain** | throttle vs what actually sustains the current angle (an integral, so 85% held too long counts, not just 100%), steering-lock headroom |
+| **exit**    | the release — throttle dumps, hanging on the counter through the snap-back |
+
+The FIRST wrong phase is the root cause: its numbers become the HUD
+verdict and everything downstream is symptom. Past the recoverable angle
+everything is excluded — and the coach never asks for more counter-steer
+when you were already at full lock (live it says `FULL LOCK — EASE
+THROTTLE` instead). For spins the bar on sustain throttle is lower: the
+spin itself proves the throttle was unsustainable, so time spent above
+the band while the angle grew takes the blame. Report cards print the
+phase table and the violation timeline with the point of no return.
+
+Modes (FREE / ROUND / CORNER / S-BEND) set the hold expectations — a
+roundabout wants one long, steady, one-directional sustain (6 s+ for the
+✓, tighter swing tolerance, direction flips flagged); a corner drift is
+naturally short. Geometry scoring (radius fit, transition timing) is
+still on the roadmap.
 
 The envelope is **calibrated per car from your own driving**
 (`recordings/calibration.json`): every moment the angle holds steady
